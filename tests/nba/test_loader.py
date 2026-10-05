@@ -46,3 +46,12 @@ def test_unreadable_artifact_names_path(tmp_path):
 
     with pytest.raises(ArtifactLoadError, match="action_catalog_pretest.parquet"):
         load_artifacts(paths)
+
+
+@pytest.mark.parametrize("value", [0, -1, True, "100", 1.5])
+def test_invalid_min_historical_sends(tmp_path, value):
+    metadata = {"model_features": ["country"], "categorical_features": ["country"]}
+    paths = write_artifacts(tmp_path, metadata={**metadata, "min_historical_sends": value})
+
+    with pytest.raises(ArtifactLoadError, match=r"nba_metadata\.json.*min_historical_sends"):
+        load_artifacts(paths)

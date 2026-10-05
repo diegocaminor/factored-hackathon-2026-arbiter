@@ -24,7 +24,7 @@ Build a focused AI-first workflow for banking customer service (e.g. account inq
 
 ## HTTP service
 
-A FastAPI service under `app/` exposes the frozen Next Best Action (NBA) engine from `src/propensity/` (notebooks 08–09), plus simulated confirm and handoff actions. `GET /health` reports **HTTP application liveness only**: it does not check model readiness. The service loads the model and pre-test data once at startup and refuses to start if any required artifact is missing.
+A FastAPI service under `app/` exposes the frozen Next Best Action (NBA) engine from `src/propensity/` (notebooks 08–09), plus simulated confirm and handoff actions and the LangGraph workflow (`POST /agent/run`). `GET /health` reports **HTTP application liveness only**: it does not check model readiness. The service loads the model and pre-test data once at startup and refuses to start if any required artifact is missing.
 
 ### Model artifacts
 
@@ -135,6 +135,63 @@ curl -s -X POST http://127.0.0.1:8000/customers/CLI-P21780PQ8D9W/handoff \
 #  "reason":"Customer asked for an advisor","queue":"sales-assistance"}
 ```
 
+### Agent workflow endpoint
+
+`POST /agent/run` runs the LangGraph workflow from `src/propensity/langgraph_nba_agent.py` once per request: load customer → NBA recommendation → ACTION/NO_ACTION routing → confirmation gate → simulated execution or human handoff. The graph contains **no LLM**. The CatBoost model and the NBA engine decide product, channel, propensity, and expected value, and `assistant_message` is a template filled with those values. The run is **stateless**: no checkpointer, thread ID, or persisted graph state. Use `GET /customers/{customer_id}/next-best-action` to preview a recommendation before deciding.
+
+Request body (both fields required; `user_confirmed` must be a JSON boolean):
+
+```json
+{"customer_id": "CLI-P21780PQ8D9W", "user_confirmed": true}
+```
+
+| Decision | `user_confirmed` | `status` | `execution_result` |
+|---|---|---|---|
+| `ACTION` | `true` | `COMPLETED` | Same body as `POST /customers/{id}/confirm` |
+| `ACTION` | `false` | `HANDOFF` | Same body as `POST /customers/{id}/handoff` (default reason) |
+| `NO_ACTION_*` | either | the decision | `null` |
+
+| HTTP status | When |
+|---|---|
+| 200 | Customer exists (every routing outcome above) |
+| 404 | Customer ID is not in the snapshot; the graph is not invoked |
+| 422 | Body missing, not an object, missing a field, or `user_confirmed` not a JSON boolean (`"true"` and `1` are rejected) |
+
+`recommendation` uses the same field names and values as `GET /customers/{id}/next-best-action`. The raw snapshot row and ranked catalog rows are never returned.
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/agent/run \
+  -H 'Content-Type: application/json' -d '{"customer_id": "CLI-P21780PQ8D9W", "user_confirmed": true}'
+# {"customer_id":"CLI-P21780PQ8D9W","user_confirmed":true,"status":"COMPLETED",
+#  "recommendation":{"decision":"ACTION","product":"Tarjeta Crédito","channel":"Push",
+#    "propensity":0.008405942144870617,"expected_conversion_value":3186.94,
+#    "estimated_send_cost":0.0005,"expected_value":26.788733259173966,"historical_support":5887},
+#  "consent_required":true,
+#  "product_details":{"name":"Tarjeta Crédito","summary":"Línea de crédito revolvente para compras y pagos."},
+#  "execution_result":{"status":"SIMULATED_SENT","customer_id":"CLI-P21780PQ8D9W","product":"Tarjeta Crédito",
+#    "channel":"Push","provider_message_id":"demo-CLI-P21780PQ8D9W-Push"},
+#  "assistant_message":"Offer simulated successfully for Tarjeta Crédito via Push."}
+
+curl -s -X POST http://127.0.0.1:8000/agent/run \
+  -H 'Content-Type: application/json' -d '{"customer_id": "CLI-P21780PQ8D9W", "user_confirmed": false}'
+# {..."status":"HANDOFF",...,"execution_result":{"status":"HANDOFF_CREATED",
+#  "customer_id":"CLI-P21780PQ8D9W","reason":"Customer did not confirm automated execution.",
+#  "queue":"sales-assistance"},"assistant_message":"No automated send performed. A human handoff was created."}
+
+curl -s -X POST http://127.0.0.1:8000/agent/run \
+  -H 'Content-Type: application/json' -d '{"customer_id": "CLI-P8F6JG7TN8YN", "user_confirmed": true}'
+# {..."status":"NO_ACTION_CONSENT",...,"execution_result":null,
+#  "assistant_message":"No outbound action recommended. Decision: NO_ACTION_CONSENT."}
+```
+
+The minimum historical sends threshold has a single source: `min_historical_sends` in `nba_metadata.json`. Startup fails if it is missing or not a positive integer. The NBA endpoint and the agent both read it from there.
+
+**Notebook 09 compatibility:** `AgentContext` now requires `min_historical_sends` and has no default. If notebook 09 is rerun against this repository's `src/propensity`, pass it explicitly:
+
+```python
+AgentContext(..., customer_id_col=customer_id_col, min_historical_sends=metadata["min_historical_sends"])
+```
+
 ### Smoke checks
 
 ```bash
@@ -144,7 +201,7 @@ curl -i http://127.0.0.1:8000/health
 curl -f http://127.0.0.1:8000/docs
 
 curl -fsS http://127.0.0.1:8000/openapi.json \
-  | python -c 'import json,sys; p=json.load(sys.stdin)["paths"]; assert "get" in p["/health"]; assert "get" in p["/customers/{customer_id}/next-best-action"]'
+  | python -c 'import json,sys; p=json.load(sys.stdin)["paths"]; assert "get" in p["/health"]; assert "get" in p["/customers/{customer_id}/next-best-action"]; assert "post" in p["/agent/run"]'
 ```
 
 Editing and saving a file under `app/` triggers an automatic reload while `--reload` is running.

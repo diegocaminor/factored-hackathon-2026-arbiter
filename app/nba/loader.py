@@ -49,6 +49,17 @@ def load_artifacts(paths: ArtifactPaths) -> NBAArtifacts:
             f"NBA metadata {paths.metadata} is missing keys: {', '.join(missing_keys)}"
         )
 
+    min_historical_sends = metadata["min_historical_sends"]
+    if (
+        isinstance(min_historical_sends, bool)
+        or not isinstance(min_historical_sends, int)
+        or min_historical_sends <= 0
+    ):
+        raise ArtifactLoadError(
+            f"NBA metadata {paths.metadata} has invalid min_historical_sends: "
+            f"{min_historical_sends!r} (expected a positive integer)"
+        )
+
     model = _load(paths.model, joblib.load)
     action_catalog = _load(paths.action_catalog, pd.read_parquet)
     customer_snapshot = _load(paths.customer_snapshot, pd.read_parquet)
@@ -68,7 +79,7 @@ def load_artifacts(paths: ArtifactPaths) -> NBAArtifacts:
         customer_positions=MappingProxyType(positions),
         model_features=tuple(metadata["model_features"]),
         categorical_features=tuple(metadata["categorical_features"]),
-        min_historical_sends=int(metadata["min_historical_sends"]),
+        min_historical_sends=min_historical_sends,
     )
 
 

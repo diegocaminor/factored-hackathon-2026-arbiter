@@ -6,3 +6,4 @@ joblib==1.6.0
 pandas==3.0.6
 numpy==2.5.3
 pyarrow==25.0.1
+langgraph==1.2.12

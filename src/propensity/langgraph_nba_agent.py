@@ -64,6 +64,7 @@ class AgentContext:
     model_features: list[str]
     categorical_features: list[str]
     customer_id_col: str
+    min_historical_sends: int
 
 
 def find_customer_row(ctx: AgentContext, customer_id: str) -> pd.Series:
@@ -83,7 +84,7 @@ def get_next_best_action_tool(ctx: AgentContext, customer_id: str) -> tuple[dict
         model=ctx.model,
         model_features=ctx.model_features,
         categorical_features=ctx.categorical_features,
-        min_historical_sends=100,
+        min_historical_sends=ctx.min_historical_sends,
     )
     return rec.__dict__, scored
 

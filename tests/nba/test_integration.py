@@ -143,3 +143,51 @@ def test_no_consent_customer_cannot_confirm_but_can_handoff(client, artifacts, n
 def test_execution_endpoints_404_for_unknown_customer(client, no_artifact_reads):
     assert client.post("/customers/CLI-DOES-NOT-EXIST/confirm").status_code == 404
     assert client.post("/customers/CLI-DOES-NOT-EXIST/handoff").status_code == 404
+
+
+def run_agent(client, customer_id, user_confirmed):
+    return client.post(
+        "/agent/run", json={"customer_id": customer_id, "user_confirmed": user_confirmed}
+    )
+
+
+def test_agent_demo_customer_confirmed_matches_confirm(client, no_artifact_reads):
+    agent = run_agent(client, DEMO_CUSTOMER, True).json()
+    confirm = client.post(f"/customers/{DEMO_CUSTOMER}/confirm").json()
+
+    assert agent["status"] == "COMPLETED"
+    assert agent["execution_result"] == confirm
+    assert agent["recommendation"]["product"] == "Tarjeta Crédito"
+    assert agent["recommendation"]["channel"] == "Push"
+
+
+def test_agent_demo_customer_unconfirmed_matches_handoff(client, no_artifact_reads):
+    agent = run_agent(client, DEMO_CUSTOMER, False).json()
+    handoff = client.post(f"/customers/{DEMO_CUSTOMER}/handoff").json()
+
+    assert agent["status"] == "HANDOFF"
+    assert agent["execution_result"] == handoff
+
+
+def test_agent_no_consent_customer_ends_without_execution(client, artifacts, no_artifact_reads):
+    body = run_agent(client, first_no_consent_customer(artifacts), True).json()
+
+    assert body["status"] == "NO_ACTION_CONSENT"
+    assert body["execution_result"] is None
+
+
+def test_agent_matches_nba_endpoint_on_sample(client, artifacts, no_artifact_reads):
+    fields = (
+        "decision",
+        "product",
+        "channel",
+        "propensity",
+        "expected_conversion_value",
+        "estimated_send_cost",
+        "expected_value",
+        "historical_support",
+    )
+    for customer_id in sample_customer_ids(artifacts):
+        agent = run_agent(client, customer_id, True).json()["recommendation"]
+        nba = client.get(f"/customers/{customer_id}/next-best-action").json()
+        assert {f: agent[f] for f in fields} == {f: nba[f] for f in fields}, customer_id
