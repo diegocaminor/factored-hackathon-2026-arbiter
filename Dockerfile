@@ -7,7 +7,11 @@ RUN useradd --create-home --shell /usr/sbin/nologin appuser
 COPY requirements.txt .
 RUN python -m pip install --no-cache-dir -r requirements.txt
 
+COPY src/propensity/ ./src/propensity/
 COPY app/ ./app/
+
+ENV PYTHONPATH=/app/src \
+    ARTIFACTS_DIR=/app/artifacts/propensity
 
 USER appuser
 

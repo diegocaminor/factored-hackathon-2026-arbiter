@@ -24,7 +24,21 @@ Build a focused AI-first workflow for banking customer service (e.g. account inq
 
 ## HTTP service
 
-A minimal FastAPI scaffold under `app/` establishes a runnable application boundary before the decision pipeline (notebooks 01–09) is integrated. `GET /health` reports **HTTP application liveness only** — it does not check model readiness.
+A FastAPI service under `app/` exposes the frozen Next Best Action (NBA) engine from `src/propensity/` (notebooks 08–09). `GET /health` reports **HTTP application liveness only**: it does not check model readiness. The service loads the model and pre-test data once at startup and refuses to start if any required artifact is missing.
+
+### Model artifacts
+
+Artifacts are not versioned (`artifacts/` is git-ignored). Copy these files from the project's Google Drive `artifacts/propensity/` folder, keeping the same relative paths:
+
+```
+artifacts/propensity/
+  final_evaluation/catboost_20261004_222052/model.joblib
+  nba/action_catalog_pretest.parquet
+  nba/customer_snapshot_pretest.parquet
+  nba/nba_metadata.json
+```
+
+The service reads them from `ARTIFACTS_DIR`, which defaults to `./artifacts/propensity` relative to the working directory. Google Drive is only the source for populating this folder; it is not used at runtime. Do not copy final-test files (`scored_test.parquet`, `FINAL_TEST_EVALUATED.json`, `test_deciles.csv`) or the Platt calibrator; the service never uses them.
 
 ### Local setup
 
@@ -37,14 +51,50 @@ python -m pip install -r requirements.txt
 ### Run locally
 
 ```bash
-uvicorn app.main:app --reload
+PYTHONPATH=src uvicorn app.main:app --reload
 ```
+
+`PYTHONPATH=src` makes the vendored `propensity` package importable. To use artifacts stored elsewhere, prefix the command with `ARTIFACTS_DIR=/path/to/artifacts/propensity`.
 
 - Health: http://127.0.0.1:8000/health
 - Swagger UI: http://127.0.0.1:8000/docs
 - OpenAPI document: http://127.0.0.1:8000/openapi.json
+- Next best action: http://127.0.0.1:8000/customers/CLI-P21780PQ8D9W/next-best-action
 
-Swagger UI loads its assets from a public CDN by default — a browser with internet access is required to view `/docs`.
+Swagger UI loads its assets from a public CDN by default, so a browser with internet access is required to view `/docs`.
+
+Startup takes a few seconds while the model and the 150k-row customer snapshot load. Without artifacts, startup fails with `ArtifactLoadError: Required NBA artifact not found: <path>`.
+
+### Next best action endpoint
+
+`GET /customers/{customer_id}/next-best-action[?include_candidates=true]`
+
+| Status | When |
+|---|---|
+| 200 | Customer exists in the pre-test snapshot, including every `NO_ACTION_*` decision |
+| 404 | Customer ID is not in the snapshot |
+
+`decision` is one of `ACTION`, `NO_ACTION_CONSENT`, `NO_ACTION_NO_SUPPORTED_CANDIDATES`, or `NO_ACTION_NEGATIVE_VALUE`. Fields the engine does not produce for a decision are `null`. `propensity` is the **raw, uncalibrated** model score used for ranking. Economic values are in the local currency of `country`; never sum them across countries.
+
+```bash
+curl -s http://127.0.0.1:8000/customers/CLI-P21780PQ8D9W/next-best-action
+# {"customer_id":"CLI-P21780PQ8D9W","country":"Argentina","decision":"ACTION",
+#  "product":"Tarjeta Crédito","channel":"Push","propensity":0.008405942144870617,
+#  "expected_conversion_value":3186.94,"estimated_send_cost":0.0005,
+#  "expected_value":26.788733259173966,"historical_support":5887,"candidates":null}
+
+curl -s http://127.0.0.1:8000/customers/CLI-P8F6JG7TN8YN/next-best-action
+# {"customer_id":"CLI-P8F6JG7TN8YN","country":"Argentina","decision":"NO_ACTION_CONSENT",
+#  "product":null,"channel":null,"propensity":null,...,"candidates":null}
+
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/customers/CLI-DOES-NOT-EXIST/next-best-action
+# 404  (body: {"detail":"Customer not found: CLI-DOES-NOT-EXIST"})
+
+curl -s 'http://127.0.0.1:8000/customers/CLI-P21780PQ8D9W/next-best-action?include_candidates=true'
+# "candidates": up to 5 ranked actions, each with rank, product, channel,
+# propensity, expected_conversion_value, estimated_send_cost, expected_value,
+# historical_support
+```
 
 ### Smoke checks
 
@@ -55,18 +105,38 @@ curl -i http://127.0.0.1:8000/health
 curl -f http://127.0.0.1:8000/docs
 
 curl -fsS http://127.0.0.1:8000/openapi.json \
-  | python -c 'import json,sys; assert "get" in json.load(sys.stdin)["paths"]["/health"]'
+  | python -c 'import json,sys; p=json.load(sys.stdin)["paths"]; assert "get" in p["/health"]; assert "get" in p["/customers/{customer_id}/next-best-action"]'
 ```
 
 Editing and saving a file under `app/` triggers an automatic reload while `--reload` is running.
+
+### Tests
+
+```bash
+python -m pip install -r requirements-dev.txt
+python -m pytest
+```
+
+`pytest.ini` puts the repository root and `src/` on the import path. Unit tests use a stub model and in-memory data. `tests/nba/test_integration.py` compares the endpoint with direct `recommend_next_best_action()` calls on the real artifacts, and is skipped when they are absent.
 
 ### Run in Docker
 
 ```bash
 docker build -t factored-nba .
-docker run -p 8000:8000 factored-nba
+docker run -p 8000:8000 \
+  -v "$PWD/artifacts/propensity:/app/artifacts/propensity:ro" \
+  factored-nba
 ```
 
-No Compose file, host ML dependencies, mounted artifacts, or application credentials are required. The container runs as a non-root user with a single Uvicorn process and no reload.
+The image contains `app/` and `src/propensity/` but never the artifacts. They are mounted read-only at the image's `ARTIFACTS_DIR` (`/app/artifacts/propensity`). No Compose file, host ML dependencies, or application credentials are required. The container runs as a non-root user with a single Uvicorn process and no reload.
 
-Repeat the same smoke checks above against `http://127.0.0.1:8000`.
+Repeat the smoke checks and endpoint examples above against `http://127.0.0.1:8000`.
+
+Running without the mount fails at startup by design (exit code 3):
+
+```bash
+docker run --rm factored-nba
+# app.nba.loader.ArtifactLoadError: Required NBA artifact not found:
+#   /app/artifacts/propensity/final_evaluation/catboost_20261004_222052/model.joblib
+# ERROR:    Application startup failed. Exiting.
+```
