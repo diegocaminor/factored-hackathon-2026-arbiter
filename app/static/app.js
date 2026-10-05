@@ -118,7 +118,7 @@ function setBadge(element, text, tone) {
 
 function decisionTone(decision) {
   if (decision === "ACTION" || decision === "COMPLETED") return "success";
-  if (decision === "HANDOFF") return "info";
+  if (decision === "HANDOFF") return "danger";
   return "warning";
 }
 
