@@ -1,0 +1,14 @@
+# Allowlisted build context: deny everything, then allow only the
+# Docker build inputs and the application source.
+*
+
+!Dockerfile
+!requirements.txt
+!app
+!app/**
+
+# Secret/cache exclusions inside the permitted app tree.
+app/**/__pycache__
+app/**/*.pyc
+app/**/.env
+app/**/.env.*
