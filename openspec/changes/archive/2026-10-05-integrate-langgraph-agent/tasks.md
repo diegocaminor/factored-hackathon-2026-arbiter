@@ -1,0 +1,23 @@
+# Tasks
+
+## 1. Dependency and single-source threshold
+
+- [x] 1.1 Add `langgraph==1.2.12` to `requirements.txt`. Verify a fresh Python 3.12 install of `requirements-dev.txt` passes `python -m pip check` and that `import langgraph` works.
+- [x] 1.2 In `src/propensity/langgraph_nba_agent.py`, add the required field `min_historical_sends: int` (no default) to `AgentContext` and make `get_next_best_action_tool` pass `ctx.min_historical_sends` instead of the literal `100`. Change nothing else in the file. Verify that `rg -n '100' src/propensity/langgraph_nba_agent.py` finds no threshold literal, that constructing `AgentContext` without the field raises `TypeError`, and that the diff is limited to those lines.
+- [x] 1.3 Make `app/nba/loader.py` reject a `min_historical_sends` that is not an `int`, is a `bool`, or is `<= 0`, with an `ArtifactLoadError` naming the metadata path and key. Verify with loader unit tests for `0`, `-1`, `true`, `"100"`, and `1.5`, and confirm the existing loader tests still pass.
+
+## 2. Agent service and schemas
+
+- [x] 2.1 Move the value sanitizers from `app/nba/service.py` to public functions in `app/nba/values.py` and update the imports. Verify the existing NBA test suite passes unchanged.
+- [x] 2.2 Add `app/agent/schemas.py` with `AgentRunRequest` (`customer_id: str`, `user_confirmed: StrictBool`), `AgentRecommendation`, `ProductDetails`, and `AgentRunResponse` (status `Literal`, `execution_result: ConfirmResponse | HandoffResponse | None`). Verify that `model_json_schema()` renders and that `AgentRunRequest` rejects a missing flag, `"true"`, and `1`.
+- [x] 2.3 Add `app/agent/service.py` with `build_agent_service(artifacts, nba_service)`, which builds `AgentContext`, including `min_historical_sends` from the artifacts, and compiles `build_nba_graph()` once. Add `AgentService.run(customer_id, user_confirmed)`, which checks `has_customer` before invoking and maps the final state to `AgentRunResponse`. Verify with unit tests on `tests/nba/fakes` and the real graph: ACTION plus true gives `COMPLETED`/`SIMULATED_SENT`; ACTION plus false gives `HANDOFF`/`HANDOFF_CREATED`; each NO_ACTION decision with both flag values ends without execution; an unknown ID raises `CustomerNotFound` without invoking the graph (spy); the response has no `customer_row` or `ranked_actions` and is strict-JSON serializable; repeated runs are identical; and a metadata threshold above the fake Chile sends produces `NO_ACTION_NO_SUPPORTED_CANDIDATES` from both the agent and `NBAService`.
+
+## 3. HTTP endpoint and wiring
+
+- [x] 3.1 Add `app/agent/router.py` with a sync `POST /agent/run`, a `get_agent_service` dependency, a required body, and a documented 404 (`ErrorResponse`). Build the agent service in the lifespan after the execution service and register the router. Verify with TestClient tests: 200 for each routing outcome, 404 for an unknown ID, and 422 for a missing body, missing fields, and non-boolean `user_confirmed`. Fidelity checks: `recommendation` equals GET next-best-action, `execution_result` equals POST confirm for true and POST handoff (no body) for false. OpenAPI shows the required body, the 200 schema, and 404. Extend the startup test to assert that the agent service is built once from the loaded artifacts, and that startup fails when metadata has an invalid `min_historical_sends`.
+- [x] 3.2 Extend the real-artifact integration tests (same skip rule) for the demo customer: `user_confirmed=true` gives `COMPLETED` with `execution_result` equal to POST confirm, and `false` gives `HANDOFF` equal to POST handoff. A consent-false customer gives `NO_ACTION_CONSENT` with no execution. For the 20-customer sample, the agent recommendation equals GET next-best-action, and no artifact is read after startup. Verify the full suite passes.
+- [x] 3.3 Update README with `/agent/run`: request and response, the routing table (true, false, NO_ACTION), status codes, the note that the graph has no LLM and the engine is the source of truth, real example responses, and the notebook 09 compatibility note (`AgentContext` now requires `min_historical_sends`). Verify every documented command runs as written against a running server.
+
+## 4. Integration and scope checks
+
+- [x] 4.1 Rebuild the Docker image and run it with the artifacts mounted. Exercise `/agent/run` for COMPLETED, HANDOFF, NO_ACTION_CONSENT, 404, and 422 on port 8000. Review the final diff: the only `src/propensity` change is the `AgentContext` field and tool argument; no LLM client or network code; no checkpointer or `thread_id`; existing NBA, confirm, and handoff responses unchanged; no threshold literal duplicated in `app/`. Run the full test suite and `openspec validate integrate-langgraph-agent --strict`.

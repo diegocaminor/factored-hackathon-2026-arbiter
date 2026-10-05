@@ -1,0 +1,22 @@
+# Allowlisted build context: deny everything, then allow only the
+# Docker build inputs, the application source, and the propensity package.
+# NBA artifacts are mounted at run time and never enter the build context.
+*
+
+!Dockerfile
+!requirements.txt
+!app
+!app/**
+!src
+!src/propensity
+!src/propensity/**
+
+# Secret/cache exclusions inside the permitted source trees.
+app/**/__pycache__
+app/**/*.pyc
+app/**/.env
+app/**/.env.*
+src/**/__pycache__
+src/**/*.pyc
+src/**/.env
+src/**/.env.*

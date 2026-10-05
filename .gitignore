@@ -8,3 +8,6 @@ dist/
 build/
 .DS_Store
 .atl/
+
+# Local model artifacts (populated from Drive, loaded via ARTIFACTS_DIR)
+artifacts/

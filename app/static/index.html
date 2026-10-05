@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Arbiter · Next Best Action</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">A</span>
+      <div>
+        <h1>Arbiter</h1>
+        <p class="tagline">Next Best Action demo · CatBoost decides, LangGraph orchestrates</p>
+      </div>
+    </div>
+    <a class="docs-link" href="/docs" target="_blank" rel="noopener">API docs</a>
+  </header>
+
+  <main class="layout">
+    <section class="card customer-bar" aria-label="Customer selection">
+      <form id="customer-form" class="customer-form">
+        <label for="customer-id">Customer ID</label>
+        <div class="input-row">
+          <input id="customer-id" name="customer-id" type="text" autocomplete="off"
+                 placeholder="e.g. CLI-P21780PQ8D9W" required>
+          <button type="submit" id="load-button" class="btn btn-primary">Load</button>
+        </div>
+      </form>
+      <div class="presets">
+        <span class="presets-label">Demo presets</span>
+        <div id="presets" class="preset-list"></div>
+        <p class="hint">Labels are hints; the decision shown always comes from the API.</p>
+      </div>
+    </section>
+
+    <div id="error-banner" class="banner banner-error" role="alert" hidden></div>
+
+    <section class="card recommendation" aria-labelledby="rec-title">
+      <div class="card-head">
+        <h2 id="rec-title">Recommendation</h2>
+        <span id="decision-badge" class="badge badge-muted">No customer loaded</span>
+      </div>
+      <dl class="metrics">
+        <div><dt>Customer</dt><dd id="m-customer">—</dd></div>
+        <div><dt>Country</dt><dd id="m-country">—</dd></div>
+        <div><dt>Product</dt><dd id="m-product">—</dd></div>
+        <div><dt>Channel</dt><dd id="m-channel">—</dd></div>
+        <div><dt>Propensity <small>(raw score)</small></dt><dd id="m-propensity">—</dd></div>
+        <div><dt>Expected value</dt><dd id="m-expected-value">—</dd></div>
+        <div><dt>Historical support</dt><dd id="m-support">—</dd></div>
+      </dl>
+    </section>
+
+    <section class="card candidates" aria-labelledby="cand-title">
+      <div class="card-head">
+        <h2 id="cand-title">Top 5 candidate actions</h2>
+      </div>
+      <table class="table">
+        <thead>
+          <tr>
+            <th>#</th><th>Product</th><th>Channel</th>
+            <th class="num">Propensity</th><th class="num">Expected value</th><th class="num">Support</th>
+          </tr>
+        </thead>
+        <tbody id="candidates-body">
+          <tr class="empty"><td colspan="6">Load a customer to see ranked actions.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="card actions" aria-labelledby="actions-title">
+      <div class="card-head">
+        <h2 id="actions-title">Execute</h2>
+      </div>
+      <div class="action-row">
+        <button id="confirm-button" class="btn btn-primary" disabled>Confirm offer</button>
+        <p id="confirm-hint" class="hint">Load a customer first.</p>
+      </div>
+      <div class="action-row">
+        <input id="handoff-reason" type="text" placeholder="Handoff reason (optional)" autocomplete="off">
+        <button id="handoff-button" class="btn btn-secondary" disabled>Hand off to human</button>
+      </div>
+      <div class="result">
+        <h3>Execution result</h3>
+        <div id="execution-result" class="result-body muted">No action executed yet.</div>
+      </div>
+    </section>
+
+    <section class="card agent" aria-labelledby="agent-title">
+      <div class="card-head">
+        <h2 id="agent-title">LangGraph workflow</h2>
+        <span id="agent-status" class="badge badge-muted">Not run</span>
+      </div>
+      <div class="action-row">
+        <label class="toggle">
+          <input id="user-confirmed" type="checkbox" checked>
+          <span>Customer confirms (<code>user_confirmed</code>)</span>
+        </label>
+        <button id="agent-button" class="btn btn-primary" disabled>Run agent</button>
+      </div>
+      <ol id="agent-path" class="flow" aria-label="Workflow path">
+        <li data-node="load_customer">Load customer</li>
+        <li data-node="recommend">Recommend</li>
+        <li data-node="prepare_offer">Prepare offer</li>
+        <li data-node="execute_offer" class="branch">Execute offer</li>
+        <li data-node="handoff" class="branch">Human handoff</li>
+        <li data-node="no_action" class="branch">No action</li>
+      </ol>
+      <p id="agent-message" class="agent-message muted">Path is derived from the <code>status</code> returned by <code>POST /agent/run</code>.</p>
+      <div id="agent-result" class="result-body muted"></div>
+    </section>
+  </main>
+
+  <footer class="footer">Simulated execution only · no providers are contacted · state is not persisted</footer>
+
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>
