@@ -25,26 +25,44 @@ The service SHALL expose Swagger UI at `/docs` and an OpenAPI JSON document at `
 - **THEN** the service returns HTTP 200 and a valid OpenAPI JSON document containing a GET operation for `/health`
 
 ### Requirement: Local development execution
-After installing the documented dependencies, a developer SHALL be able to start the service from the repository root with `uvicorn app.main:app --reload` and access it at `http://127.0.0.1:8000`.
+After installing the documented dependencies and placing the NBA artifacts under the artifacts directory, a developer SHALL be able to start the service from the repository root using the documented development command, which runs `uvicorn app.main:app --reload` with `src` on the Python import path, and access it at `http://127.0.0.1:8000`.
 
 #### Scenario: Local startup
-- **WHEN** a developer runs the documented local command with port 8000 available
-- **THEN** the service starts with development reload enabled and serves `/health`, `/docs`, and `/openapi.json`
+- **WHEN** a developer runs the documented local command with port 8000 available and artifacts present in `./artifacts/propensity`
+- **THEN** the service starts with development reload enabled and serves `/health`, `/docs`, `/openapi.json`, and the next-best-action endpoint
 
 ### Requirement: Container execution
-With Docker available, a developer SHALL be able to build using `docker build -t factored-nba .` and run using `docker run -p 8000:8000 factored-nba`. The container SHALL run as a non-root user without development reload and expose the same HTTP behavior through host port 8000.
+With Docker available, a developer SHALL be able to build using `docker build -t factored-nba .` and run using `docker run -p 8000:8000` with the host artifacts directory mounted read-only at the container's `ARTIFACTS_DIR`. The container SHALL run as a non-root user without development reload and expose the same HTTP behavior through host port 8000.
 
 #### Scenario: Build and run the container
-- **WHEN** a developer executes the documented build and run commands with port 8000 available
-- **THEN** the container serves `/health`, `/docs`, and `/openapi.json` at `http://127.0.0.1:8000`, runs with a nonzero user ID, and does not enable reload
+- **WHEN** a developer executes the documented build command, then the documented run command with the artifacts mounted and port 8000 available
+- **THEN** the container serves `/health`, `/docs`, `/openapi.json`, and the next-best-action endpoint at `http://127.0.0.1:8000`, runs with a nonzero user ID, and does not enable reload
 
-### Requirement: Independent runtime
-The service SHALL start without propensity modules, ML artifacts, LangGraph, or application credentials. Its container build context and runtime image SHALL exclude notebooks, ML source and artifacts, secrets, Git metadata, and development caches.
+### Requirement: Configurable artifact location
+The service SHALL resolve NBA artifacts from the directory named by the `ARTIFACTS_DIR` environment variable. When the variable is unset, it SHALL use `./artifacts/propensity` relative to the working directory. The service SHALL NOT depend on Google Drive or any remote storage at runtime.
 
-#### Scenario: Experimental resources are absent
-- **WHEN** the service starts locally or in Docker without propensity code, model files, or credentials
-- **THEN** startup succeeds and the health and documentation endpoints remain available without contacting an ML or agent service
+#### Scenario: Default artifact directory
+- **WHEN** the service starts from the repository root without `ARTIFACTS_DIR` set and artifacts are present in `./artifacts/propensity`
+- **THEN** startup succeeds using those artifacts
 
-#### Scenario: Container packaging excludes research resources
-- **WHEN** the image is built from the repository
-- **THEN** notebooks, ML source and artifacts, secrets, Git metadata, and development caches are excluded from the build context and absent from the application directory in the image
+#### Scenario: Overridden artifact directory
+- **WHEN** the service starts with `ARTIFACTS_DIR` pointing to another directory that contains the artifacts
+- **THEN** startup succeeds using the artifacts from that directory
+
+### Requirement: Fail-fast artifact loading
+The service SHALL load the model, action catalog, customer snapshot, and NBA metadata once during startup, before accepting requests, and SHALL reuse them for every request. If any required artifact is missing or cannot be loaded, startup SHALL fail with an error that names the artifact path, and the service SHALL NOT serve requests. `GET /health` SHALL continue to report liveness only.
+
+#### Scenario: Missing artifact
+- **WHEN** the service starts and the customer snapshot file is absent from the artifacts directory
+- **THEN** the process exits during startup with an error naming the missing file path, and no port serves requests
+
+#### Scenario: Artifacts reused across requests
+- **WHEN** the running service handles multiple next-best-action requests
+- **THEN** no artifact file is read again after startup
+
+### Requirement: Container image contents
+The container image SHALL contain the application source and the `propensity` package source. It SHALL exclude NBA artifacts, notebooks, secrets, Git metadata, and development caches. Artifacts SHALL be provided at run time through a mount.
+
+#### Scenario: Image excludes artifacts and research files
+- **WHEN** the image is built from the repository with artifacts present on the host
+- **THEN** the image's application directory contains `app/` and `src/propensity/` sources, and no model, parquet, notebook, environment, or Git files
