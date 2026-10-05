@@ -192,18 +192,107 @@ The minimum historical sends threshold has a single source: `min_historical_send
 AgentContext(..., customer_id_col=customer_id_col, min_historical_sends=metadata["min_historical_sends"])
 ```
 
+### Conversational agent endpoint
+
+`POST /agent/chat` runs one customer-facing chat turn. An LLM does two things only: it classifies the intent of the customer's latest message, and it writes the reply. Application code decides and executes everything in between, and the NBA engine is recomputed on every turn, so product, channel, and decision always come from the engine.
+
+The endpoint is **stateless**: send the full history on every request, oldest first, ending with a `user` message (at most 20 messages, 2,000 characters each). Nothing is stored between requests.
+
+| Intent | What the service does | `action_taken` |
+|---|---|---|
+| `REQUEST_RECOMMENDATION`, `ASK_WHY`, `ASK_PRODUCT` | Nothing; the reply explains the offer | `NONE` |
+| `CONFIRM` with decision `ACTION` | Simulated send, same as `POST /customers/{id}/confirm` | `OFFER_CONFIRMED` |
+| `CONFIRM` without an `ACTION` decision | Nothing; the reply asks for clarification | `NONE` |
+| `DECLINE` | Nothing; no automatic handoff | `NONE` |
+| `REQUEST_HUMAN` | Handoff with reason `Customer requested human assistance via chat.` | `HANDOFF_CREATED` |
+| `UNCLEAR` | Nothing; the reply asks a clarifying question | `NONE` |
+
+**Data minimization.** The LLM receives only the conversation and a customer-safe view: whether an offer exists, product, product summary, channel, country, and a safe outcome of the executed action. It never receives propensity, economic values, candidate rankings, historical support, decision codes, customer model features (such as gender, marital status, income, or credit score), or system names. As a second layer, a reply that names an internal term is replaced with a fixed safe reply. For non-`ACTION` decisions, such as `NO_ACTION_CONSENT`, the agent presents no offer and offers an advisor instead.
+
+**Configuration.** Chat is optional and needs an OpenAI API key:
+
+| Variable | Purpose |
+|---|---|
+| `OPENAI_API_KEY` | Enables chat. Without it, `/agent/chat` answers 503 and every other endpoint works as usual. |
+| `CHAT_MODEL` | Optional model ID. Defaults to `gpt-4o-mini`. |
+
+```bash
+OPENAI_API_KEY=sk-... PYTHONPATH=src uvicorn app.main:app --reload
+```
+
+Without a key:
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/agent/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"customer_id":"CLI-P21780PQ8D9W","messages":[{"role":"user","content":"Hi"}]}'
+# 503 {"detail":"Chat agent is unavailable: no LLM provider is configured."}
+```
+
+With a key (reply wording varies between runs; the other fields do not):
+
+```bash
+# Recommendation
+curl -s -X POST http://127.0.0.1:8000/agent/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"customer_id":"CLI-P21780PQ8D9W","messages":[{"role":"user","content":"What do you recommend for me?"}]}'
+# {"customer_id":"CLI-P21780PQ8D9W","reply":"...Tarjeta Crédito...",
+#  "intent":"REQUEST_RECOMMENDATION","action_taken":"NONE","execution_result":null}
+
+# Why it is relevant
+curl -s -X POST http://127.0.0.1:8000/agent/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"customer_id":"CLI-P21780PQ8D9W","messages":[{"role":"user","content":"Why is this a good fit for me?"}]}'
+# "intent":"ASK_WHY","action_taken":"NONE"
+
+# Confirm, with history sent by the client
+curl -s -X POST http://127.0.0.1:8000/agent/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"customer_id":"CLI-P21780PQ8D9W","messages":[
+        {"role":"user","content":"What do you recommend for me?"},
+        {"role":"assistant","content":"I can suggest a credit card, Tarjeta Crédito."},
+        {"role":"user","content":"Yes, please send it to me."}]}'
+# "intent":"CONFIRM","action_taken":"OFFER_CONFIRMED",
+# "execution_result":{"status":"SIMULATED_SENT",...,"provider_message_id":"demo-CLI-P21780PQ8D9W-Push"}
+
+# Decline
+curl -s -X POST http://127.0.0.1:8000/agent/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"customer_id":"CLI-P21780PQ8D9W","messages":[{"role":"user","content":"No thanks, I am not interested."}]}'
+# "intent":"DECLINE","action_taken":"NONE","execution_result":null
+
+# Human assistance
+curl -s -X POST http://127.0.0.1:8000/agent/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"customer_id":"CLI-P21780PQ8D9W","messages":[{"role":"user","content":"Quiero hablar con un asesor"}]}'
+# "intent":"REQUEST_HUMAN","action_taken":"HANDOFF_CREATED",
+# "execution_result":{"status":"HANDOFF_CREATED",...,"reason":"Customer requested human assistance via chat.","queue":"sales-assistance"}
+
+# NO CONSENT customer: no offer is presented and nothing is sent, even when they say yes
+curl -s -X POST http://127.0.0.1:8000/agent/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"customer_id":"CLI-P8F6JG7TN8YN","messages":[{"role":"user","content":"Yes, send it"}]}'
+# "intent":"CONFIRM","action_taken":"NONE","execution_result":null
+```
+
+Other errors: 404 for an unknown customer (no LLM call), 422 for an invalid body, and 502 when the provider fails before any action ran. If the provider fails after an action ran, the response is still 200 with the real action fields and a fixed bilingual reply.
+
 ### Demo UI
 
-With the service running, open `http://127.0.0.1:8000/`. The page is plain HTML, JavaScript, and CSS under `app/static/`, served by the same FastAPI app: no build step, no extra process, no CDN. It calls only the four endpoints above and never touches ML code or artifacts. The header links to `/docs`.
+With the service running, open `http://127.0.0.1:8000/`. The page is plain HTML, JavaScript, and CSS under `app/static/`, served by the same FastAPI app: no build step, no extra process, no CDN. It calls only the five endpoints above and never touches ML code or artifacts. The header links to `/docs`.
+
+The customer bar is shared by two tabs: **Decision Engine** (selected by default) shows what the bank decides, and **Customer Agent** shows what the customer hears. Switching tabs never reloads data.
 
 | Panel | What it does |
 |---|---|
-| Customer bar | Pick a demo preset or type any customer ID, then Load. Calls `GET /customers/{id}/next-best-action?include_candidates=true`. |
+| Customer bar (shared) | Pick a demo preset or type any customer ID, then Load. Calls `GET /customers/{id}/next-best-action?include_candidates=true`. |
 | Recommendation | Decision badge, country, product, channel, propensity (raw score), expected value in local currency, and historical support. Missing values show as `—`. |
 | Top 5 candidate actions | Ranked candidates from the same response; the top row is highlighted. |
 | Execute | **Confirm offer** calls `POST /customers/{id}/confirm`, enabled only when the decision is `ACTION`. **Hand off to human** calls `POST /customers/{id}/handoff` with the optional reason. The execution result appears below. |
 | LangGraph workflow | Calls `POST /agent/run` with the `user_confirmed` toggle and highlights the path derived from the returned `status`, with the assistant message and execution result. |
-| Error banner | Shows 404, 409, and 422 responses with the API's `detail`, and connection errors when the server is unreachable. |
+| Customer Agent tab | Chat with the loaded customer through `POST /agent/chat`. Replies are shown exactly as the backend writes them; the page adds no logic. History lives only in page memory, the latest 20 messages are sent each turn, and the chat resets when a different customer is loaded. Requires `OPENAI_API_KEY` on the server (see [Conversational agent endpoint](#conversational-agent-endpoint)). |
+| Debug (last turn) | Beside the chat, for presenters only: the last turn's intent, action taken, and execution result. Never part of the customer conversation. |
+| Error banner | Shows 404, 409, 422, 502, and 503 responses with the API's `detail`, and connection errors when the server is unreachable. A chat message that fails returns to the input. |
 
 Demo presets:
 
@@ -218,11 +307,11 @@ Labels are hints only. The decision shown always comes from the API at runtime. 
 
 #### Manual demo checklist
 
-Run against the Docker image with mounted artifacts (see [Run in Docker](#run-in-docker)), using a named container so step 12 works:
+Run against the Docker image with mounted artifacts (see [Run in Docker](#run-in-docker)), using a named container so the last steps work. The Customer Agent steps need a `.env` file with `OPENAI_API_KEY`:
 
 ```bash
 docker build -t factored-nba .
-docker run -d --name nba-ui -p 8000:8000 \
+docker run -d --name nba-ui -p 8000:8000 --env-file .env \
   -v "$PWD/artifacts/propensity:/app/artifacts/propensity:ro" \
   factored-nba
 ```
@@ -240,9 +329,17 @@ docker run -d --name nba-ui -p 8000:8000 \
 | 9 | **Run agent** on that customer | Status `NO_ACTION_CONSENT`, path ending in No action |
 | 10 | Type `NO-EXISTE` and Load | Error banner "Not found: Customer not found: NO-EXISTE" |
 | 11 | Type `CLI-S5RL0QD6GG1U` and Load | Loads as `ACTION` |
-| 12 | Run `docker stop nba-ui`, then Load | Error banner "Connection error: the API could not be reached..." |
+| 12 | Open **Customer Agent**, then go back to **Decision Engine** | `CLI-S5RL0QD6GG1U` still loaded in both; nothing reloads |
+| 13 | Load `CLI-P21780PQ8D9W`, open **Customer Agent**, send "What do you recommend for me?" | Your message on the right, a typing indicator, then a reply presenting Tarjeta Crédito; debug shows `REQUEST_RECOMMENDATION`, `NONE` |
+| 14 | Send "Why is this a good fit for me?" | A general, account-based reason with no personal facts or internal terms |
+| 15 | Send "Yes, please send it to me." | Reply confirms the offer was sent; debug shows `CONFIRM`, `OFFER_CONFIRMED`, `SIMULATED_SENT` |
+| 16 | Send "¿Puedo hablar con un asesor?" | Reply in Spanish; debug shows `REQUEST_HUMAN`, `HANDOFF_CREATED` |
+| 17 | Load preset `CLI-P8F6JG7TN8YN` | The chat is empty again |
+| 18 | Send "Yes, send it" | No offer is presented and an advisor is offered; debug shows `CONFIRM`, `NONE` |
+| 19 | Run `docker stop nba-ui`, then Load | Error banner "Connection error: the API could not be reached..." |
+| 20 | Run `docker rm nba-ui`, start it again without `--env-file .env`, load a customer, and send a chat message | Error banner "Unavailable: Chat agent is unavailable: no LLM provider is configured."; the message returns to the input |
 
-Clean up with `docker rm nba-ui`.
+Clean up with `docker rm -f nba-ui`.
 
 ### Smoke checks
 
@@ -276,7 +373,16 @@ docker run -p 8000:8000 \
   factored-nba
 ```
 
-The image contains `app/` and `src/propensity/` but never the artifacts. They are mounted read-only at the image's `ARTIFACTS_DIR` (`/app/artifacts/propensity`). No Compose file, host ML dependencies, or application credentials are required. The container runs as a non-root user with a single Uvicorn process and no reload.
+The image contains `app/` and `src/propensity/` but never the artifacts. They are mounted read-only at the image's `ARTIFACTS_DIR` (`/app/artifacts/propensity`). No Compose file or host ML dependencies are required, and no credentials are baked into the image. The container runs as a non-root user with a single Uvicorn process and no reload.
+
+To enable the conversational agent, pass the key at run time:
+
+```bash
+docker run -p 8000:8000 \
+  -e OPENAI_API_KEY=sk-... \
+  -v "$PWD/artifacts/propensity:/app/artifacts/propensity:ro" \
+  factored-nba
+```
 
 Repeat the smoke checks and endpoint examples above against `http://127.0.0.1:8000`.
 

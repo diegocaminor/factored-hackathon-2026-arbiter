@@ -13,7 +13,11 @@ const endpoints = {
   confirm: (id) => `/customers/${encodeURIComponent(id)}/confirm`,
   handoff: (id) => `/customers/${encodeURIComponent(id)}/handoff`,
   agentRun: () => `/agent/run`,
+  chat: () => `/agent/chat`,
 };
+
+// /agent/chat is stateless and accepts at most this many messages per request.
+const CHAT_WINDOW = 20;
 
 // Workflow path per /agent/run status; node names mirror the vendored LangGraph graph.
 const AGENT_PATHS = {
@@ -23,7 +27,12 @@ const AGENT_PATHS = {
 };
 
 const $ = (id) => document.getElementById(id);
-const state = { customerId: null, decision: null, country: null };
+const state = {
+  customerId: null,
+  decision: null,
+  country: null,
+  chat: { messages: [], pending: false },
+};
 
 // ---------- API client ----------
 
@@ -57,7 +66,13 @@ function describeDetail(payload) {
 
 function showError(result) {
   const banner = $("error-banner");
-  const titles = { 404: "Not found", 409: "Not allowed", 422: "Invalid request" };
+  const titles = {
+    404: "Not found",
+    409: "Not allowed",
+    422: "Invalid request",
+    502: "Chat agent error",
+    503: "Unavailable",
+  };
   if (result.kind === "network") {
     banner.textContent = "Connection error: the API could not be reached. Is the server running?";
   } else {
@@ -103,7 +118,7 @@ function setBadge(element, text, tone) {
 
 function decisionTone(decision) {
   if (decision === "ACTION" || decision === "COMPLETED") return "success";
-  if (decision === "HANDOFF") return "info";
+  if (decision === "HANDOFF") return "danger";
   return "warning";
 }
 
@@ -227,6 +242,9 @@ function syncControls() {
   $("confirm-button").disabled = !actionable;
   $("handoff-button").disabled = !loaded;
   $("agent-button").disabled = !loaded;
+  const chatReady = loaded && !state.chat.pending;
+  $("chat-input").disabled = !chatReady;
+  $("chat-send").disabled = !chatReady;
   $("confirm-hint").textContent = !loaded
     ? "Load a customer first."
     : actionable
@@ -246,6 +264,7 @@ async function loadCustomer(customerId) {
       showError(result);
       return;
     }
+    const customerChanged = id !== state.customerId;
     Object.assign(state, {
       customerId: id,
       decision: result.data.decision,
@@ -253,6 +272,8 @@ async function loadCustomer(customerId) {
     });
     renderRecommendation(result.data);
     resetPanels();
+    // A conversation belongs to one customer; reloading the same customer keeps it.
+    if (customerChanged) resetChat();
   });
 }
 
@@ -287,6 +308,107 @@ async function runAgent() {
   });
 }
 
+// ---------- customer agent ----------
+
+function resetChat() {
+  state.chat.messages = [];
+  $("chat-debug").textContent = "No turn yet.";
+  $("chat-debug").classList.add("muted");
+  renderChat();
+}
+
+// Text-only rendering: replies and customer messages are never parsed as HTML.
+function renderChat() {
+  const transcript = $("chat-transcript");
+  const { messages } = state.chat;
+  setBadge(
+    $("chat-customer"),
+    state.customerId ?? "No customer loaded",
+    state.customerId ? "info" : "muted",
+  );
+  if (messages.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "chat-empty muted";
+    empty.textContent = state.customerId
+      ? "Send a message to start the conversation."
+      : "Load a customer above to start a conversation.";
+    transcript.replaceChildren(empty);
+    return;
+  }
+  transcript.replaceChildren(
+    ...messages.map(({ role, content }) => {
+      const bubble = document.createElement("div");
+      bubble.className = `bubble bubble-${role}`;
+      bubble.textContent = content;
+      return bubble;
+    }),
+  );
+  transcript.scrollTop = transcript.scrollHeight;
+}
+
+function renderChatDebug(turn) {
+  const result = turn.execution_result;
+  renderFields($("chat-debug"), [
+    ["Intent", turn.intent],
+    ["Action taken", turn.action_taken],
+    ["Execution", result ? result.status : null],
+    ["Detail", result ? result.provider_message_id || result.queue : null],
+  ]);
+}
+
+function setChatPending(pending) {
+  state.chat.pending = pending;
+  $("chat-typing").hidden = !pending;
+  syncControls();
+}
+
+// The backend decides everything; this only sends the message and shows the reply.
+async function sendChat(event) {
+  event.preventDefault();
+  const input = $("chat-input");
+  const content = input.value.trim();
+  if (!content || state.customerId === null || state.chat.pending) return;
+
+  clearError();
+  const customerId = state.customerId;
+  state.chat.messages.push({ role: "user", content });
+  input.value = "";
+  renderChat();
+  setChatPending(true);
+  try {
+    const result = await api("POST", endpoints.chat(), {
+      customer_id: customerId,
+      messages: state.chat.messages.slice(-CHAT_WINDOW),
+    });
+    // Ignore a late reply if the customer changed while it was pending.
+    if (customerId !== state.customerId) return;
+    if (result.kind === "ok") {
+      state.chat.messages.push({ role: "assistant", content: result.data.reply });
+      renderChatDebug(result.data);
+    } else {
+      // Never keep a customer message the backend did not answer.
+      state.chat.messages.pop();
+      input.value = content;
+      showError(result);
+    }
+    renderChat();
+  } finally {
+    setChatPending(false);
+  }
+}
+
+// ---------- tabs ----------
+
+// Switching only toggles visibility; no tab reloads data or clears its content.
+function selectTab(selected) {
+  for (const tab of document.querySelectorAll('[role="tab"]')) {
+    const active = tab === selected;
+    tab.setAttribute("aria-selected", String(active));
+    tab.tabIndex = active ? 0 : -1;
+    $(tab.getAttribute("aria-controls")).hidden = !active;
+  }
+}
+
 // ---------- wiring ----------
 
 function renderPresets() {
@@ -317,6 +439,11 @@ $("customer-form").addEventListener("submit", (event) => {
 $("confirm-button").addEventListener("click", confirmOffer);
 $("handoff-button").addEventListener("click", handOff);
 $("agent-button").addEventListener("click", runAgent);
+for (const tab of document.querySelectorAll('[role="tab"]')) {
+  tab.addEventListener("click", () => selectTab(tab));
+}
+$("chat-form").addEventListener("submit", sendChat);
 
 renderPresets();
+renderChat();
 syncControls();
