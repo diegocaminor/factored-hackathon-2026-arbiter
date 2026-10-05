@@ -39,11 +39,15 @@ When no LLM provider is configured, the service SHALL start normally and SHALL r
 - **THEN** the response has HTTP 503, and `GET /health` and `GET /customers/{customer_id}/next-best-action` still respond normally
 
 ### Requirement: Provider failure
-If the LLM provider fails or returns an unusable result while classifying intent, the service SHALL respond with HTTP 502 and SHALL NOT execute any action. If the provider fails while writing the reply after an action already ran, the service SHALL still respond with HTTP 200, the real `action_taken` and `execution_result`, and a fixed fallback reply that describes the outcome.
+If the LLM provider fails or returns an unusable result while classifying intent, the service SHALL respond with HTTP 502 and SHALL NOT execute any action. If it fails while writing the reply and no action ran, the service SHALL respond with HTTP 502. If it fails while writing the reply after an action already ran, the service SHALL still respond with HTTP 200, the real `action_taken` and `execution_result`, and a fixed fallback reply that describes the outcome.
 
 #### Scenario: Classification fails
 - **WHEN** the provider errors during intent classification
 - **THEN** the response has HTTP 502 and no confirm or handoff is executed
+
+#### Scenario: Reply writing fails without an action
+- **WHEN** the intent is read-only and the provider errors while writing the reply
+- **THEN** the response has HTTP 502
 
 #### Scenario: Reply writing fails after a confirmation
 - **WHEN** a confirm action has executed and the provider errors while writing the reply

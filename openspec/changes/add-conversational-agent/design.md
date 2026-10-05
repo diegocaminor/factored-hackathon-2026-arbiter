@@ -33,7 +33,7 @@ See `proposal.md` for motivation and `specs/conversational-agent/spec.md` for be
                                   |
            ChatModel.write_reply(messages, view, intent, outcome)
                  |                                 |
-               reply                         error -> fixed fallback
+               reply             error -> fixed fallback (action ran) or 502 (none)
                  |
            output guard --forbidden term--> fixed safe reply
                  |
@@ -42,9 +42,9 @@ See `proposal.md` for motivation and `specs/conversational-agent/spec.md` for be
 
    *Alternative:* a tool-use loop where the LLM calls `confirm_offer` itself. Rejected: it gives the model execution authority and makes gates depend on prompt compliance. A single call returning intent and reply together was also rejected, because the reply must describe an outcome that only exists after dispatch.
 
-2. **`ChatModel` port with two methods.** `classify(messages, view) -> Intent` and `write_reply(messages, view, intent, outcome) -> str`. The production adapter uses the Anthropic SDK; tests use a scripted fake that records every payload it receives. This mirrors the existing `OfferSender` / `HandoffQueue` port pattern, and keeps the service free of SDK types.
+2. **`ChatModel` port with two methods.** `classify(messages, view) -> Classification(intent, language)` and `write_reply(messages, view, intent, language) -> str`, where the view carries the safe outcome once an action ran. Both raise `ChatModelError` on provider failure or unusable output. The production adapter uses the OpenAI SDK (Responses API); tests use a scripted fake that records every payload it receives. This mirrors the existing `OfferSender` / `HandoffQueue` port pattern, and keeps the service free of SDK types.
 
-3. **Classification uses structured output constrained to the intent enum.** The adapter requests JSON matching `{"intent": <one of 7 values>}` and validates it with Pydantic. A refusal stop reason, invalid JSON, or an unknown value counts as an unusable result (HTTP 502 for classification). The latest user message is the classification target; earlier messages are context only.
+3. **Classification uses structured output constrained to the intent enum.** The adapter requests JSON matching `{"intent": <one of 7 values>, "language": <name>}` and validates both. The language of the latest message is detected here and passed to the reply call as `reply_language`: in the end-to-end run, a small model asked to "match the customer's language" followed the Spanish product summary and the country instead, while an explicit language value was followed reliably. A refusal, an incomplete response, invalid JSON, or an unknown value counts as an unusable result (HTTP 502 for classification). The latest user message is the classification target; earlier messages are context only.
 
 4. **`SafeView` is the only data path to the LLM.** A frozen Pydantic model built from the engine response and product details, holding exactly `has_offer`, `product`, `product_summary`, `channel`, `country`, and `outcome`. When the decision is not `ACTION`, product fields are `None` and `has_offer` is `False`. The decision code is never copied, so the model cannot reveal it. The adapter serializes only `SafeView` and the message list, so a forbidden field can only reach the model by adding it to `SafeView`, which the tests guard.
 
@@ -63,26 +63,26 @@ See `proposal.md` for motivation and `specs/conversational-agent/spec.md` for be
 
 6. **`outcome` is a safe summary, not the execution payload.** For example `{"type": "offer_sent", "channel": "Push"}` or `{"type": "advisor_requested"}`. `provider_message_id` and queue names stay out of the prompt; the full `execution_result` goes only into the HTTP response.
 
-7. **Output guard is a case-insensitive deny-list** over the reply: `catboost`, `propensity`, `expected value`, `next best action`, `nba`, `langgraph`, `ranking`, `score`, `model`, and `algorithm`, matched on word boundaries. A match returns the fixed bilingual safe reply. It is defense in depth behind decision 4, not the primary control, so false positives (a customer-facing "model" in another sense) are acceptable.
+7. **Output guard is a case-insensitive deny-list** over the reply: `catboost`, `propensity`, `expected value`, `next best action`, `nba`, `langgraph`, `ranking`, `score`, `model`, and `algorithm`, plus Spanish equivalents (`propensión`, `puntuación`, `puntaje`, `modelo`, `algoritmo`), matched on word boundaries with plural endings. A match returns the fixed bilingual safe reply. It is defense in depth behind decision 4, not the primary control, so false positives (a customer-facing "model" in another sense) are acceptable.
 
-8. **Fixed replies are bilingual constants** (Spanish then English), because they are produced without the LLM and cannot detect the language. There are three: safe reply (guard), fallback after an action ran (one per outcome type), and nothing else. Classification failure is an HTTP 502, not a reply.
+8. **Fixed replies are bilingual constants** (Spanish then English), because they are produced without the LLM and cannot detect the language. They are the safe reply (guard) and the fallback after an action ran (one per outcome type). A provider failure while classifying, or while writing a reply when no action ran, is an HTTP 502, not a reply: there is no outcome to preserve.
 
-9. **Configuration and 503.** `ANTHROPIC_API_KEY` enables the provider; `CHAT_MODEL` selects the model and defaults to `claude-opus-5-5`. At startup, `app.state.chat_service` is built only when the key is a non-empty string; otherwise it is `None` and the router dependency raises 503. The SDK client is created once. *Alternative:* failing startup without a key. Rejected: the NBA, execution, and agent endpoints and the demo UI must keep working offline.
+9. **Configuration and 503.** `OPENAI_API_KEY` enables the provider; `CHAT_MODEL` selects the model and defaults to `gpt-4o-mini`. At startup, `app.state.chat_service` is built only when the key is a non-empty string; otherwise it is `None` and the router dependency raises 503. The SDK client is created once. *Alternative:* failing startup without a key. Rejected: the NBA, execution, and agent endpoints and the demo UI must keep working offline.
 
-10. **Model call settings.** Both calls use low effort (classification and short customer replies do not benefit from deeper reasoning), a bounded `max_tokens`, a short timeout, and the SDK's default retries. The system prompts are static strings, so they are cache-friendly, and they state the persona, the reply-language rule, the supported-explanations rule with the approved example phrasing, and the "never present an offer when `has_offer` is false" rule. Refusals are handled as unusable results per decision 3; server-side refusal fallbacks are enabled on the request.
+10. **Model call settings.** Both calls use the Responses API with bounded `max_output_tokens`, a short timeout, the SDK's default retries, and `store=False`, so the provider keeps no customer conversation. The static rules go in `instructions`; the per-request context (the serialized `SafeView`, plus the intent when writing) goes in a `developer` message ahead of the conversation, a role the customer cannot author. The instructions state the persona, the reply-language rule, the supported-explanations rule with the approved example phrasing, and the "never present an offer when `has_offer` is false" rule. Refusal content items and non-`completed` statuses are unusable results per decision 3. *Alternative:* the Anthropic SDK, which the change was first planned with; replaced by OpenAI at the user's request. Only the adapter and settings changed, thanks to the port.
 
-11. **Package layout.** New `app/chat/` with `router.py`, `schemas.py` (request, response, `Intent`, `ActionTaken`), `service.py` (orchestration and dispatch), `safe_view.py`, `guard.py`, and `model.py` (port plus Anthropic adapter). The router depends only on `ChatService`.
+11. **Package layout.** New `app/chat/` with `router.py`, `schemas.py` (request, response, `Intent`, `ActionTaken`), `service.py` (orchestration and dispatch), `safe_view.py`, `guard.py`, and `model.py` (port plus OpenAI adapter). The router depends only on `ChatService`.
 
 ## Risks / Trade-offs
 
 - [The LLM misclassifies a message as `CONFIRM`] → Only the latest message counts, the decision must be `ACTION`, and the action is a simulated send. The classification prompt tells the model to choose `UNCLEAR` when consent is not explicit.
 - [The LLM states unsupported facts despite the prompt] → It only sees the safe view, so there are no personal facts to misuse; the system prompt forbids the rest. Not machine-verifiable beyond the guard; covered by the manual checklist.
 - [The deny-list misses a paraphrase of an internal concept] → The data was never sent, so a paraphrase cannot carry real values.
-- [Two LLM calls add latency] → Low effort and short outputs. Acceptable for a demo turn.
+- [Two LLM calls add latency] → A small default model and short outputs. Acceptable for a demo turn.
 - [Client-supplied history can be forged] → History is never trusted for product, channel, or consent beyond the latest message, and the engine is recomputed each turn.
 - [Fixed bilingual replies read awkwardly] → They occur only on guard hits or provider failures after an action.
 - [New runtime dependency and secret] → The key is read from the environment at run time, never baked into the image, never logged.
 
 ## Migration Plan
 
-Additive. Install the new dependency and rebuild the image. Run with `-e ANTHROPIC_API_KEY=...` (and optionally `-e CHAT_MODEL=...`) to enable chat; without them, everything else behaves as today. Rollback means reverting the change's commits.
+Additive. Install the new dependency and rebuild the image. Run with `-e OPENAI_API_KEY=...` (and optionally `-e CHAT_MODEL=...`) to enable chat; without them, everything else behaves as today. Rollback means reverting the change's commits.

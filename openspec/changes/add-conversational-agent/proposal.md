@@ -32,7 +32,7 @@ None. `next-best-action`, `offer-execution`, `agent-orchestration`, `http-servic
 
 - Code: new `app/chat/` package (router, schemas, service, chat model port with a provider adapter, safe-view builder, output guard). `app/main.py` registers the router and builds the chat service at startup only when a provider is configured.
 - APIs: new `POST /agent/chat`. Existing endpoints are unchanged.
-- Dependencies: the LLM provider SDK (`anthropic`) is added to `requirements.txt`.
+- Dependencies: the OpenAI SDK (`openai`) is added to `requirements.txt`.
 - Configuration: new environment variables for the provider API key and model. The key is supplied at run time and never baked into the image.
 - Tests: a fake chat model covers dispatch, confirmation gates, data minimization, forbidden-field absence, and output guard behavior without calling the real provider.
 - Docs: README gains the chat endpoint, configuration, and examples.

@@ -8,6 +8,10 @@ from fastapi.staticfiles import StaticFiles
 
 from app.agent.router import router as agent_router
 from app.agent.service import build_agent_service
+from app.chat.model import build_chat_model
+from app.chat.router import router as chat_router
+from app.chat.service import ChatService
+from app.chat.settings import resolve_chat_settings
 from app.execution.adapters import SimulatedHandoffQueue, SimulatedOfferSender
 from app.execution.router import router as execution_router
 from app.execution.service import ExecutionService
@@ -29,6 +33,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         nba_service, SimulatedOfferSender(), SimulatedHandoffQueue()
     )
     app.state.agent_service = build_agent_service(artifacts, nba_service)
+    # Chat is optional: without a provider key it answers 503 and nothing else changes.
+    chat_settings = resolve_chat_settings()
+    app.state.chat_service = (
+        ChatService(nba_service, app.state.execution_service, build_chat_model(chat_settings))
+        if chat_settings is not None
+        else None
+    )
     yield
 
 
@@ -36,6 +47,7 @@ app = FastAPI(lifespan=lifespan)
 app.include_router(nba_router)
 app.include_router(execution_router)
 app.include_router(agent_router)
+app.include_router(chat_router)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
