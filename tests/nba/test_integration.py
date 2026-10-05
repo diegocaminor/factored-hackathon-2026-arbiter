@@ -108,3 +108,38 @@ def test_unknown_customer_returns_404(client, no_artifact_reads):
     response = client.get("/customers/CLI-DOES-NOT-EXIST/next-best-action")
 
     assert response.status_code == 404
+
+
+def first_no_consent_customer(artifacts):
+    return sample_customer_ids(artifacts)[1]
+
+
+def test_demo_customer_confirms_simulated_send(client, no_artifact_reads):
+    response = client.post(f"/customers/{DEMO_CUSTOMER}/confirm")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "SIMULATED_SENT",
+        "customer_id": DEMO_CUSTOMER,
+        "product": "Tarjeta Crédito",
+        "channel": "Push",
+        "provider_message_id": f"demo-{DEMO_CUSTOMER}-Push",
+    }
+
+
+def test_no_consent_customer_cannot_confirm_but_can_handoff(client, artifacts, no_artifact_reads):
+    customer_id = first_no_consent_customer(artifacts)
+
+    confirm = client.post(f"/customers/{customer_id}/confirm")
+    handoff = client.post(f"/customers/{customer_id}/handoff")
+
+    assert confirm.status_code == 409
+    assert "NO_ACTION_CONSENT" in confirm.json()["detail"]
+    assert handoff.status_code == 200
+    assert handoff.json()["status"] == "HANDOFF_CREATED"
+    assert handoff.json()["queue"] == "sales-assistance"
+
+
+def test_execution_endpoints_404_for_unknown_customer(client, no_artifact_reads):
+    assert client.post("/customers/CLI-DOES-NOT-EXIST/confirm").status_code == 404
+    assert client.post("/customers/CLI-DOES-NOT-EXIST/handoff").status_code == 404

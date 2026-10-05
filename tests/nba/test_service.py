@@ -41,6 +41,12 @@ def test_action_recommendation(nba_service):
     assert response.candidates is None
 
 
+def test_has_customer(nba_service, stub_model):
+    assert nba_service.has_customer("CLI-ACTION")
+    assert not nba_service.has_customer("CLI-MISSING")
+    assert stub_model.calls == 0
+
+
 def test_unknown_customer_does_not_call_model(nba_service, stub_model):
     with pytest.raises(CustomerNotFound, match="CLI-MISSING"):
         nba_service.recommend("CLI-MISSING")

@@ -24,7 +24,7 @@ Build a focused AI-first workflow for banking customer service (e.g. account inq
 
 ## HTTP service
 
-A FastAPI service under `app/` exposes the frozen Next Best Action (NBA) engine from `src/propensity/` (notebooks 08–09). `GET /health` reports **HTTP application liveness only**: it does not check model readiness. The service loads the model and pre-test data once at startup and refuses to start if any required artifact is missing.
+A FastAPI service under `app/` exposes the frozen Next Best Action (NBA) engine from `src/propensity/` (notebooks 08–09), plus simulated confirm and handoff actions. `GET /health` reports **HTTP application liveness only**: it does not check model readiness. The service loads the model and pre-test data once at startup and refuses to start if any required artifact is missing.
 
 ### Model artifacts
 
@@ -94,6 +94,45 @@ curl -s 'http://127.0.0.1:8000/customers/CLI-P21780PQ8D9W/next-best-action?inclu
 # "candidates": up to 5 ranked actions, each with rank, product, channel,
 # propensity, expected_conversion_value, estimated_send_cost, expected_value,
 # historical_support
+```
+
+### Confirm and handoff endpoints
+
+After a recommendation, a client either confirms it, which simulates sending the offer, or escalates the customer to a human. Both actions are **simulated**: no SMS, Push, WhatsApp, or other provider is contacted. Both are **stateless**: nothing is persisted, and repeated confirms simulate repeated sends with the same `provider_message_id`.
+
+`POST /customers/{customer_id}/confirm` takes no body. The server recomputes the recommendation and sends its product and channel.
+
+| Status | When |
+|---|---|
+| 200 | Current decision is `ACTION`; returns `status` `SIMULATED_SENT`, `customer_id`, `product`, `channel`, `provider_message_id` |
+| 409 | Customer exists but the current decision is a `NO_ACTION_*` value |
+| 404 | Customer ID is not in the snapshot |
+
+`POST /customers/{customer_id}/handoff` takes an optional JSON body `{"reason": string | null}`. When it is absent or null, the reason defaults to `Customer did not confirm automated execution.`. Handoff works for any known customer, whatever the decision.
+
+| Status | When |
+|---|---|
+| 200 | Customer exists; returns `status` `HANDOFF_CREATED`, `customer_id`, `reason`, `queue` (`sales-assistance`) |
+| 422 | Body is not a JSON object, or `reason` is not a string or null |
+| 404 | Customer ID is not in the snapshot |
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/customers/CLI-P21780PQ8D9W/confirm
+# {"status":"SIMULATED_SENT","customer_id":"CLI-P21780PQ8D9W","product":"Tarjeta Crédito",
+#  "channel":"Push","provider_message_id":"demo-CLI-P21780PQ8D9W-Push"}
+
+curl -s -w '\n%{http_code}\n' -X POST http://127.0.0.1:8000/customers/CLI-P8F6JG7TN8YN/confirm
+# {"detail":"Customer CLI-P8F6JG7TN8YN has no actionable recommendation (decision: NO_ACTION_CONSENT)"}
+# 409
+
+curl -s -X POST http://127.0.0.1:8000/customers/CLI-P8F6JG7TN8YN/handoff
+# {"status":"HANDOFF_CREATED","customer_id":"CLI-P8F6JG7TN8YN",
+#  "reason":"Customer did not confirm automated execution.","queue":"sales-assistance"}
+
+curl -s -X POST http://127.0.0.1:8000/customers/CLI-P21780PQ8D9W/handoff \
+  -H 'Content-Type: application/json' -d '{"reason": "Customer asked for an advisor"}'
+# {"status":"HANDOFF_CREATED","customer_id":"CLI-P21780PQ8D9W",
+#  "reason":"Customer asked for an advisor","queue":"sales-assistance"}
 ```
 
 ### Smoke checks

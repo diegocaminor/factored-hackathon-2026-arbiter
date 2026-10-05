@@ -24,6 +24,9 @@ class NBAService:
     def __init__(self, artifacts: NBAArtifacts) -> None:
         self._artifacts = artifacts
 
+    def has_customer(self, customer_id: str) -> bool:
+        return customer_id in self._artifacts.customer_positions
+
     def recommend(self, customer_id: str, include_candidates: bool = False) -> NextBestActionResponse:
         artifacts = self._artifacts
         position = artifacts.customer_positions.get(customer_id)

@@ -1,6 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from app.execution.service import ExecutionService
 from app.main import app
 from app.nba.loader import ArtifactLoadError
 from app.nba.service import NBAService
@@ -25,6 +26,8 @@ def test_startup_loads_service_once_and_health_stays_liveness(tmp_path, monkeypa
         client.get("/health")
 
         assert isinstance(service, NBAService)
+        assert isinstance(app.state.execution_service, ExecutionService)
+        assert app.state.execution_service._nba is service
         assert app.state.nba_service is service
         assert response.status_code == 200
         assert response.json() == {"status": "ok"}
