@@ -11,8 +11,8 @@
 
 ## 3. Docs and demo verification
 
-- [ ] 3.1 Update README with the UI URL (`http://127.0.0.1:8000/`), what each panel does, the preset list with the note that labels are hints and the API decides, the note that only ACTION and NO CONSENT occur in real data, and a manual demo checklist covering every `demo-ui` scenario. Verify by running the checklist end to end in a browser against the Docker image with mounted artifacts: ACTION preset load and candidates, Confirm, Handoff with and without a reason, Confirm disabled for NO CONSENT, agent COMPLETED, HANDOFF, and NO_ACTION paths, unknown-ID 404 banner, and the connection-error banner after stopping the container.
+- [x] 3.1 Update README with the UI URL (`http://127.0.0.1:8000/`), what each panel does, the preset list with the note that labels are hints and the API decides, the note that only ACTION and NO CONSENT occur in real data, and a manual demo checklist covering every `demo-ui` scenario. Verify by running the checklist end to end in a browser against the Docker image with mounted artifacts: ACTION preset load and candidates, Confirm, Handoff with and without a reason, Confirm disabled for NO CONSENT, agent COMPLETED, HANDOFF, and NO_ACTION paths, unknown-ID 404 banner, and the connection-error banner after stopping the container.
 
 ## 4. Integration and scope checks
 
-- [ ] 4.1 Review the final diff: only `app/static/*`, `app/main.py` (mount plus `GET /`), tests, and README changed; no new dependency, endpoint (beyond `GET /`), Dockerfile, or `.dockerignore` change; no ML import or artifact path in the static files. Run the full test suite and `openspec validate add-demo-ui --strict`.
+- [x] 4.1 Review the final diff: only `app/static/*`, `app/main.py` (mount plus `GET /`), tests, and README changed; no new dependency, endpoint (beyond `GET /`), Dockerfile, or `.dockerignore` change; no ML import or artifact path in the static files. Run the full test suite and `openspec validate add-demo-ui --strict`.

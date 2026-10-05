@@ -192,6 +192,58 @@ The minimum historical sends threshold has a single source: `min_historical_send
 AgentContext(..., customer_id_col=customer_id_col, min_historical_sends=metadata["min_historical_sends"])
 ```
 
+### Demo UI
+
+With the service running, open `http://127.0.0.1:8000/`. The page is plain HTML, JavaScript, and CSS under `app/static/`, served by the same FastAPI app: no build step, no extra process, no CDN. It calls only the four endpoints above and never touches ML code or artifacts. The header links to `/docs`.
+
+| Panel | What it does |
+|---|---|
+| Customer bar | Pick a demo preset or type any customer ID, then Load. Calls `GET /customers/{id}/next-best-action?include_candidates=true`. |
+| Recommendation | Decision badge, country, product, channel, propensity (raw score), expected value in local currency, and historical support. Missing values show as `—`. |
+| Top 5 candidate actions | Ranked candidates from the same response; the top row is highlighted. |
+| Execute | **Confirm offer** calls `POST /customers/{id}/confirm`, enabled only when the decision is `ACTION`. **Hand off to human** calls `POST /customers/{id}/handoff` with the optional reason. The execution result appears below. |
+| LangGraph workflow | Calls `POST /agent/run` with the `user_confirmed` toggle and highlights the path derived from the returned `status`, with the assistant message and execution result. |
+| Error banner | Shows 404, 409, and 422 responses with the API's `detail`, and connection errors when the server is unreachable. |
+
+Demo presets:
+
+| Customer ID | Label |
+|---|---|
+| `CLI-P21780PQ8D9W` | ACTION |
+| `CLI-S5RL0QD6GG1U` | ACTION |
+| `CLI-P8F6JG7TN8YN` | NO CONSENT |
+| `CLI-QHXK2HCRNFBI` | NO CONSENT |
+
+Labels are hints only. The decision shown always comes from the API at runtime. In real data only `ACTION` and `NO_ACTION_CONSENT` occur; the `NO_ACTION_NEGATIVE_VALUE` and `NO_ACTION_NO_SUPPORTED_CANDIDATES` paths are covered by backend tests and cannot be shown in the live demo.
+
+#### Manual demo checklist
+
+Run against the Docker image with mounted artifacts (see [Run in Docker](#run-in-docker)), using a named container so step 12 works:
+
+```bash
+docker build -t factored-nba .
+docker run -d --name nba-ui -p 8000:8000 \
+  -v "$PWD/artifacts/propensity:/app/artifacts/propensity:ro" \
+  factored-nba
+```
+
+| # | Action | Expected |
+|---|---|---|
+| 1 | Open `http://127.0.0.1:8000/` | Header "Arbiter" with the API docs link, four presets with ACTION or NO CONSENT badges, action buttons disabled |
+| 2 | Click preset `CLI-P21780PQ8D9W` | Badge `ACTION`, Argentina, Tarjeta Crédito, Push, propensity 0.0084, expected value 26.79 (Argentina), support 5,887, five candidate rows with #1 highlighted |
+| 3 | Click **Confirm offer** | Execution result `SIMULATED_SENT` with `demo-CLI-P21780PQ8D9W-Push` |
+| 4 | Click **Hand off to human** with an empty reason | `HANDOFF_CREATED`, the default reason, queue `sales-assistance` |
+| 5 | Type a reason and hand off again | `HANDOFF_CREATED` with the typed reason |
+| 6 | **Run agent** with the toggle on | Status `COMPLETED`, path Load customer → Recommend → Prepare offer → Execute offer |
+| 7 | Turn the toggle off and **Run agent** | Status `HANDOFF`, path ending in Human handoff |
+| 8 | Click preset `CLI-P8F6JG7TN8YN` | Badge `NO_ACTION_CONSENT`, dashes in the metrics, empty candidates, Confirm disabled with "Only ACTION recommendations can be confirmed." |
+| 9 | **Run agent** on that customer | Status `NO_ACTION_CONSENT`, path ending in No action |
+| 10 | Type `NO-EXISTE` and Load | Error banner "Not found: Customer not found: NO-EXISTE" |
+| 11 | Type `CLI-S5RL0QD6GG1U` and Load | Loads as `ACTION` |
+| 12 | Run `docker stop nba-ui`, then Load | Error banner "Connection error: the API could not be reached..." |
+
+Clean up with `docker rm nba-ui`.
+
 ### Smoke checks
 
 ```bash
