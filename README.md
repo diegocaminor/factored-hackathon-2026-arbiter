@@ -279,16 +279,20 @@ Other errors: 404 for an unknown customer (no LLM call), 422 for an invalid body
 
 ### Demo UI
 
-With the service running, open `http://127.0.0.1:8000/`. The page is plain HTML, JavaScript, and CSS under `app/static/`, served by the same FastAPI app: no build step, no extra process, no CDN. It calls only the four endpoints above and never touches ML code or artifacts. The header links to `/docs`.
+With the service running, open `http://127.0.0.1:8000/`. The page is plain HTML, JavaScript, and CSS under `app/static/`, served by the same FastAPI app: no build step, no extra process, no CDN. It calls only the five endpoints above and never touches ML code or artifacts. The header links to `/docs`.
+
+The customer bar is shared by two tabs: **Decision Engine** (selected by default) shows what the bank decides, and **Customer Agent** shows what the customer hears. Switching tabs never reloads data.
 
 | Panel | What it does |
 |---|---|
-| Customer bar | Pick a demo preset or type any customer ID, then Load. Calls `GET /customers/{id}/next-best-action?include_candidates=true`. |
+| Customer bar (shared) | Pick a demo preset or type any customer ID, then Load. Calls `GET /customers/{id}/next-best-action?include_candidates=true`. |
 | Recommendation | Decision badge, country, product, channel, propensity (raw score), expected value in local currency, and historical support. Missing values show as `—`. |
 | Top 5 candidate actions | Ranked candidates from the same response; the top row is highlighted. |
 | Execute | **Confirm offer** calls `POST /customers/{id}/confirm`, enabled only when the decision is `ACTION`. **Hand off to human** calls `POST /customers/{id}/handoff` with the optional reason. The execution result appears below. |
 | LangGraph workflow | Calls `POST /agent/run` with the `user_confirmed` toggle and highlights the path derived from the returned `status`, with the assistant message and execution result. |
-| Error banner | Shows 404, 409, and 422 responses with the API's `detail`, and connection errors when the server is unreachable. |
+| Customer Agent tab | Chat with the loaded customer through `POST /agent/chat`. Replies are shown exactly as the backend writes them; the page adds no logic. History lives only in page memory, the latest 20 messages are sent each turn, and the chat resets when a different customer is loaded. Requires `OPENAI_API_KEY` on the server (see [Conversational agent endpoint](#conversational-agent-endpoint)). |
+| Debug (last turn) | Beside the chat, for presenters only: the last turn's intent, action taken, and execution result. Never part of the customer conversation. |
+| Error banner | Shows 404, 409, 422, 502, and 503 responses with the API's `detail`, and connection errors when the server is unreachable. A chat message that fails returns to the input. |
 
 Demo presets:
 
@@ -303,11 +307,11 @@ Labels are hints only. The decision shown always comes from the API at runtime. 
 
 #### Manual demo checklist
 
-Run against the Docker image with mounted artifacts (see [Run in Docker](#run-in-docker)), using a named container so step 12 works:
+Run against the Docker image with mounted artifacts (see [Run in Docker](#run-in-docker)), using a named container so the last steps work. The Customer Agent steps need a `.env` file with `OPENAI_API_KEY`:
 
 ```bash
 docker build -t factored-nba .
-docker run -d --name nba-ui -p 8000:8000 \
+docker run -d --name nba-ui -p 8000:8000 --env-file .env \
   -v "$PWD/artifacts/propensity:/app/artifacts/propensity:ro" \
   factored-nba
 ```
@@ -325,9 +329,17 @@ docker run -d --name nba-ui -p 8000:8000 \
 | 9 | **Run agent** on that customer | Status `NO_ACTION_CONSENT`, path ending in No action |
 | 10 | Type `NO-EXISTE` and Load | Error banner "Not found: Customer not found: NO-EXISTE" |
 | 11 | Type `CLI-S5RL0QD6GG1U` and Load | Loads as `ACTION` |
-| 12 | Run `docker stop nba-ui`, then Load | Error banner "Connection error: the API could not be reached..." |
+| 12 | Open **Customer Agent**, then go back to **Decision Engine** | `CLI-S5RL0QD6GG1U` still loaded in both; nothing reloads |
+| 13 | Load `CLI-P21780PQ8D9W`, open **Customer Agent**, send "What do you recommend for me?" | Your message on the right, a typing indicator, then a reply presenting Tarjeta Crédito; debug shows `REQUEST_RECOMMENDATION`, `NONE` |
+| 14 | Send "Why is this a good fit for me?" | A general, account-based reason with no personal facts or internal terms |
+| 15 | Send "Yes, please send it to me." | Reply confirms the offer was sent; debug shows `CONFIRM`, `OFFER_CONFIRMED`, `SIMULATED_SENT` |
+| 16 | Send "¿Puedo hablar con un asesor?" | Reply in Spanish; debug shows `REQUEST_HUMAN`, `HANDOFF_CREATED` |
+| 17 | Load preset `CLI-P8F6JG7TN8YN` | The chat is empty again |
+| 18 | Send "Yes, send it" | No offer is presented and an advisor is offered; debug shows `CONFIRM`, `NONE` |
+| 19 | Run `docker stop nba-ui`, then Load | Error banner "Connection error: the API could not be reached..." |
+| 20 | Run `docker rm nba-ui`, start it again without `--env-file .env`, load a customer, and send a chat message | Error banner "Unavailable: Chat agent is unavailable: no LLM provider is configured."; the message returns to the input |
 
-Clean up with `docker rm nba-ui`.
+Clean up with `docker rm -f nba-ui`.
 
 ### Smoke checks
 

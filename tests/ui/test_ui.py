@@ -46,6 +46,7 @@ ALLOWED_API_PATHS = {
     "/customers/{id}/confirm",
     "/customers/{id}/handoff",
     "/agent/run",
+    "/agent/chat",
 }
 
 
@@ -58,5 +59,44 @@ def api_paths_in_script():
 def test_script_calls_only_existing_endpoints():
     paths = api_paths_in_script()
 
-    # Every API path the UI calls is an existing endpoint, and all four are used.
+    # Every API path the UI calls is an existing endpoint, and all five are used.
     assert paths == ALLOWED_API_PATHS
+
+
+DECISION_ENGINE_IDS = (
+    "decision-badge",
+    "candidates-body",
+    "confirm-button",
+    "handoff-button",
+    "execution-result",
+    "agent-button",
+    "agent-path",
+)
+
+
+def test_tabs_default_to_decision_engine():
+    html = client.get("/").text
+
+    assert re.search(r'id="tab-button-decision"[^>]*aria-selected="true"', html)
+    assert re.search(r'id="tab-button-agent"[^>]*aria-selected="false"', html)
+    assert re.search(r'<div id="tab-decision"[^>]*role="tabpanel"(?![^>]*hidden)[^>]*>', html)
+    assert re.search(r'<div id="tab-agent"[^>]*role="tabpanel"[^>]*hidden', html)
+
+
+def test_decision_engine_panels_stay_inside_their_tab():
+    html = client.get("/").text
+    decision = html[html.index('id="tab-decision"') : html.index('id="tab-agent"')]
+
+    for element_id in DECISION_ENGINE_IDS:
+        assert f'id="{element_id}"' in decision
+
+
+def test_customer_agent_tab_markup():
+    html = client.get("/").text
+    agent = html[html.index('id="tab-agent"') :]
+
+    for element_id in ("chat-transcript", "chat-typing", "chat-form", "chat-send", "chat-debug"):
+        assert f'id="{element_id}"' in agent
+    assert re.search(r'id="chat-input"[^>]*maxlength="2000"', agent)
+    # The debug panel is a separate card, outside the conversation transcript.
+    assert agent.index('id="chat-debug"') > agent.index("</section>")

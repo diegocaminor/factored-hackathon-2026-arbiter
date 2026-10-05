@@ -37,6 +37,14 @@
 
     <div id="error-banner" class="banner banner-error" role="alert" hidden></div>
 
+    <div class="tabs" role="tablist" aria-label="Views">
+      <button type="button" class="tab" role="tab" id="tab-button-decision"
+              aria-controls="tab-decision" aria-selected="true">Decision Engine</button>
+      <button type="button" class="tab" role="tab" id="tab-button-agent"
+              aria-controls="tab-agent" aria-selected="false" tabindex="-1">Customer Agent</button>
+    </div>
+
+    <div id="tab-decision" class="tab-panel" role="tabpanel" aria-labelledby="tab-button-decision">
     <section class="card recommendation" aria-labelledby="rec-title">
       <div class="card-head">
         <h2 id="rec-title">Recommendation</h2>
@@ -111,6 +119,36 @@
       <p id="agent-message" class="agent-message muted">Path is derived from the <code>status</code> returned by <code>POST /agent/run</code>.</p>
       <div id="agent-result" class="result-body muted"></div>
     </section>
+    </div>
+
+    <div id="tab-agent" class="tab-panel" role="tabpanel" aria-labelledby="tab-button-agent" hidden>
+      <section class="card chat" aria-labelledby="chat-title">
+        <div class="card-head">
+          <h2 id="chat-title">Customer Agent</h2>
+          <span id="chat-customer" class="badge badge-muted">No customer loaded</span>
+        </div>
+        <div id="chat-transcript" class="chat-transcript" aria-live="polite">
+          <p id="chat-empty" class="chat-empty muted">Load a customer above to start a conversation.</p>
+        </div>
+        <div id="chat-typing" class="bubble bubble-assistant typing" hidden>
+          <span class="sr-only">The assistant is typing</span><span></span><span></span><span></span>
+        </div>
+        <form id="chat-form" class="chat-form">
+          <label for="chat-input" class="sr-only">Message</label>
+          <input id="chat-input" type="text" maxlength="2000" autocomplete="off"
+                 placeholder="Write a message..." disabled>
+          <button type="submit" id="chat-send" class="btn btn-primary" disabled>Send</button>
+        </form>
+      </section>
+
+      <aside class="card debug" aria-labelledby="debug-title">
+        <div class="card-head">
+          <h2 id="debug-title">Debug (last turn)</h2>
+        </div>
+        <p class="hint">For presenters only. Never shown to the customer.</p>
+        <div id="chat-debug" class="result-body muted">No turn yet.</div>
+      </aside>
+    </div>
   </main>
 
   <footer class="footer">Simulated execution only · no providers are contacted · state is not persisted</footer>
