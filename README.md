@@ -22,6 +22,45 @@ Build a focused AI-first workflow for banking customer service (e.g. account inq
 
 🚧 In progress — Challenge period: Sep 25 – Oct 5, 2026
 
+## For reviewers: where to look
+
+**Live demo:** https://arbiter.diegocamino.com — the **Decision Engine** tab shows what the bank decides for a customer, and the **Customer Agent** tab shows the conversation the customer has. Start with a demo preset such as `CLI-P21780PQ8D9W`.
+
+Suggested reading order: the workflow discovery document, then the benchmark matrix, then the notebooks, then the service code.
+
+### Product discovery (`product-discovery/`)
+
+| File | What it contains |
+|---|---|
+| [`Factored Hackathon - Workflow Discovery - Next Best Action.docx`](product-discovery/Factored%20Hackathon%20-%20Workflow%20Discovery%20-%20Next%20Best%20Action.docx) | The reasoning behind the solution: why the initial fraud-detection idea was dropped (weak supporting signal in the synthetic data), the pivot to marketing Next Best Action, validation on the full history of 1.75M campaign sends, product × channel and economic signal, data anomalies (WhatsApp and Voice never convert), the proposed architecture, the AI agent's role, and modeling guardrails. |
+| [`Factored Hackathon - Baseline Benchmark Matrix.xlsx`](product-discovery/Factored%20Hackathon%20-%20Baseline%20Benchmark%20Matrix.xlsx) | The baselines the model is measured against. **Baseline Matrix**: conversion by product and channel, plus global, channel, and per-country economic baselines. **Economic Examples**: net value per send by country, product, and best channel. **Benchmark Notes**: how each baseline is defined and used. **Arbiter Economic Simulation**: top-decile lift (1.335 on the untouched test set) and the resulting ~25% fewer contacts for the same number of conversions, with the caveats that keep it from being read as production ROI. |
+
+### Analysis and modeling notebooks (`notebooks-discovery/`)
+
+Run in order; each one consumes the output of the previous ones.
+
+| Notebook | Purpose |
+|---|---|
+| [`01_eda_latam_bank_dataset`](notebooks-discovery/01_eda_latam_bank_dataset.ipynb) | Exploration of the LATAM bank dataset on S3. |
+| [`02_marketing_next_best_action`](notebooks-discovery/02_marketing_next_best_action.ipynb) | Checks whether conversion varies enough by campaign, product, channel, and customer to support a Next Best Action workflow. |
+| [`03_decision_dataset_preparation`](notebooks-discovery/03_decision_dataset_preparation.ipynb) | Builds the modeling dataset: one row per customer × product × channel × send time. |
+| [`04_propensity_model_training`](notebooks-discovery/04_propensity_model_training.ipynb) | Baseline propensity model for `P(conversion \| customer, product, channel, context)` with time-aware splits. |
+| [`05_propensity_model_experiments`](notebooks-discovery/05_propensity_model_experiments.ipynb) | Logistic-regression experiments; they showed almost no ranking signal. |
+| [`06_catboost_propensity_experiments`](notebooks-discovery/06_catboost_propensity_experiments.ipynb) | Switches to CatBoost to learn non-linear interactions between customer, product, channel, and context. |
+| [`07_final_holdout_and_calibration`](notebooks-discovery/07_final_holdout_and_calibration.ipynb) | Freezes the selected CatBoost model, calibrates on validation only, and evaluates the test set exactly once. |
+| [`08_next_best_action_engine`](notebooks-discovery/08_next_best_action_engine.ipynb) | The decision engine: scores product × channel candidates and ranks them by expected value. |
+| [`09_langgraph_nba_agent`](notebooks-discovery/09_langgraph_nba_agent.ipynb) | Wraps the engine in a LangGraph workflow in which the language layer never invents product, channel, or values. |
+
+### Service and specifications
+
+| Path | What it contains |
+|---|---|
+| `app/` | FastAPI service: NBA endpoint, simulated confirm and handoff, LangGraph workflow, conversational agent, and the demo UI. Details below. |
+| `src/propensity/` | The frozen NBA engine and LangGraph graph used by notebooks 08–09 and by the service. |
+| `openspec/specs/` | Behavior specifications for each capability (`next-best-action`, `offer-execution`, `agent-orchestration`, `conversational-agent`, `http-service`, `demo-ui`). |
+| `openspec/changes/archive/` | Each change as it was planned: proposal, design decisions, and tasks. |
+| `tests/` | Automated tests (248), runnable without the provider key or the real artifacts. |
+
 ## HTTP service
 
 A FastAPI service under `app/` exposes the frozen Next Best Action (NBA) engine from `src/propensity/` (notebooks 08–09), plus simulated confirm and handoff actions and the LangGraph workflow (`POST /agent/run`). `GET /health` reports **HTTP application liveness only**: it does not check model readiness. The service loads the model and pre-test data once at startup and refuses to start if any required artifact is missing.
